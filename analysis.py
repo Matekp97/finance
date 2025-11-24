@@ -119,7 +119,7 @@ def calculate_correlation(data, col1, col2):
     Returns:
         Correlation coefficient
     """
-    return data[col1].corr(data[col2])
+    return data[col1].corr(data[col2].abs())
 
 
 def normalize_prices(stocks_data, base=100):

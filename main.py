@@ -1,4 +1,6 @@
 from datetime import datetime, timedelta
+import matplotlib.pyplot as plt
+
 from data_fetcher import download_multiple_stocks, prepare_stock_data
 from analysis import (
     analyze_multiple_stocks,
@@ -8,7 +10,7 @@ from analysis import (
     calculate_correlation
 )
 from plotting import setup_plot_style, plot_multiple_stocks, plot_price_and_volume
-
+from strategy import analyze_trades_detailed, analyze_drawdown, moving_average_crossover_strategy
 
 def main():
     """Main analysis script for stock data."""
@@ -51,7 +53,7 @@ def main():
     plot_multiple_stocks(stocks_data, normalized=False)
 
     # Detailed analysis for a specific stock
-    ticker_detail = 'PLTR'
+    ticker_detail = 'AAPL'
     print(f"\n\n📊 Detailed analysis for {ticker_detail}")
     print("="*60)
 
@@ -83,18 +85,112 @@ def main():
         print(f"Maximum volume: {vol_stats['max']:,.0f}")
         print(f"Minimum volume: {vol_stats['min']:,.0f}")
         print(f"Standard deviation: {vol_stats['std']:,.0f}")
-
+        
         # Correlation analysis
         correlation = calculate_correlation(
             pltr_data,
             'Volume_Ratio',
-            pltr_data['Daily_Return'].abs()
+            'Daily_Return'
         )
         print(f"\n🔗 Correlation between Volume Ratio and |Daily Return|: {correlation:.3f}")
         print("(Values close to 1 = strong correlation, close to 0 = no correlation)")
 
         # Plot price and volume chart
         plot_price_and_volume(pltr_data, ticker_detail)
+
+
+        # Test della strategia su AAPL (meno volatile di PLTR per il primo test)
+        start = '2010-01-01'
+        end = '2025-11-20'
+
+        results = moving_average_crossover_strategy(ticker_detail, start, end, 
+                                                    fast_period=20, slow_period=50,
+                                                    initial_capital=10000)
+
+        # Visualizza i primi segnali
+        print("\n🎯 PRIMI SEGNALI GENERATI:")
+        trades = results[results['Position'] != 0][['Close', 'MA_Fast', 'MA_Slow', 'Position']].head(10)
+        trades['Action'] = trades['Position'].map({1: '🟢 BUY', -1: '🔴 SELL'})
+        print(trades[['Close', 'Action']])
+
+        trades_df = analyze_trades_detailed(results, initial_capital=10000)
+
+        print("\n📊 ANALISI TRADE-BY-TRADE")
+        print("="*100)
+        print(trades_df.to_string(index=False))
+        print("="*100)
+
+        # Statistiche sui trade
+        print("\n📈 STATISTICHE DETTAGLIATE:")
+        print(f"Numero totale trade: {len(trades_df)}")
+        print(f"Trade vincenti: {len(trades_df[trades_df['Result'] == 'WIN'])}")
+        print(f"Trade perdenti: {len(trades_df[trades_df['Result'] == 'LOSS'])}")
+        print(f"\nWin Rate: {(len(trades_df[trades_df['Result'] == 'WIN']) / len(trades_df) * 100):.2f}%")
+
+        winning_trades = trades_df[trades_df['Result'] == 'WIN']
+        losing_trades = trades_df[trades_df['Result'] == 'LOSS']
+
+        if len(winning_trades) > 0:
+            print(f"\nAverage Win: {winning_trades['PnL_%'].mean():.2f}%")
+            print(f"Average Win ($): ${winning_trades['PnL_$'].mean():.2f}")
+            print(f"Largest Win: {winning_trades['PnL_%'].max():.2f}%")
+
+        if len(losing_trades) > 0:
+            print(f"\nAverage Loss: {losing_trades['PnL_%'].mean():.2f}%")
+            print(f"Average Loss ($): ${losing_trades['PnL_$'].mean():.2f}")
+            print(f"Largest Loss: {losing_trades['PnL_%'].min():.2f}%")
+
+        # Risk/Reward Ratio
+        if len(losing_trades) > 0 and len(winning_trades) > 0:
+            risk_reward = abs(winning_trades['PnL_%'].mean() / losing_trades['PnL_%'].mean())
+            print(f"\nRisk/Reward Ratio: {risk_reward:.2f}")
+
+        print(f"\nHolding period medio: {trades_df['Holding_Days'].mean():.1f} giorni")
+
+        # Grafico distribuzione P&L
+        fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+
+        # 1. Histogram dei rendimenti
+        axes[0, 0].hist(trades_df['PnL_%'], bins=20, color='steelblue', alpha=0.7, edgecolor='black')
+        axes[0, 0].axvline(x=0, color='red', linestyle='--', linewidth=2)
+        axes[0, 0].set_title('Distribuzione Rendimenti per Trade', fontweight='bold')
+        axes[0, 0].set_xlabel('P&L (%)')
+        axes[0, 0].set_ylabel('Frequenza')
+        axes[0, 0].grid(True, alpha=0.3)
+
+        # 2. Win vs Loss comparison
+        win_count = len(winning_trades)
+        loss_count = len(losing_trades)
+        axes[0, 1].bar(['Winning Trades', 'Losing Trades'], [win_count, loss_count],
+                    color=['green', 'red'], alpha=0.7, edgecolor='black')
+        axes[0, 1].set_title('Win vs Loss Trades', fontweight='bold')
+        axes[0, 1].set_ylabel('Numero di Trade')
+        axes[0, 1].grid(True, alpha=0.3, axis='y')
+
+        # 3. P&L cumulativo trade-by-trade
+        trades_df['Cumulative_PnL_$'] = trades_df['PnL_$'].cumsum()
+        axes[1, 0].plot(trades_df['Trade_Num'], trades_df['Cumulative_PnL_$'], 
+                        marker='o', linewidth=2, markersize=6, color='green')
+        axes[1, 0].axhline(y=0, color='red', linestyle='--', linewidth=1)
+        axes[1, 0].set_title('P&L Cumulativo per Trade', fontweight='bold')
+        axes[1, 0].set_xlabel('Numero Trade')
+        axes[1, 0].set_ylabel('P&L Cumulativo ($)')
+        axes[1, 0].grid(True, alpha=0.3)
+
+        # 4. Holding period distribution
+        axes[1, 1].hist(trades_df['Holding_Days'], bins=15, color='orange', alpha=0.7, edgecolor='black')
+        axes[1, 1].set_title('Distribuzione Holding Period', fontweight='bold')
+        axes[1, 1].set_xlabel('Giorni')
+        axes[1, 1].set_ylabel('Frequenza')
+        axes[1, 1].grid(True, alpha=0.3)
+
+        plt.tight_layout()
+        plt.show()
+
+
+        # Esegui analisi drawdown
+        analyze_drawdown(results)
+
 
 
 if __name__ == "__main__":
